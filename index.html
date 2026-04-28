@@ -91,6 +91,32 @@
       color: var(--accent);
       min-height: 1.5em;
     }
+
+    .progress-wrap {
+      margin: 8px 0 18px;
+    }
+
+    .progress-label {
+      margin: 0 0 6px;
+      color: var(--text);
+      font: 13px/1.3 Consolas, Monaco, monospace;
+    }
+
+    .progress-track {
+      width: 100%;
+      height: 10px;
+      border-radius: 999px;
+      background: #0b1220;
+      border: 1px solid var(--border);
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #0ea5e9, #38bdf8);
+      transition: width 260ms ease;
+    }
   </style>
 </head>
 <body>
@@ -115,6 +141,12 @@ Maya Chen</textarea>
     <button id="run" type="button">Load Model and Redact</button>
 
     <p id="status" class="status">Ready.</p>
+    <div class="progress-wrap" aria-live="polite">
+      <p id="progress-label" class="progress-label">Progress: 0%</p>
+      <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div id="progress-fill" class="progress-fill"></div>
+      </div>
+    </div>
 
     <h2>Redacted Text</h2>
     <pre id="redacted"></pre>
@@ -131,12 +163,22 @@ Maya Chen</textarea>
     const status = document.querySelector("#status");
     const redacted = document.querySelector("#redacted");
     const output = document.querySelector("#output");
+    const progressLabel = document.querySelector("#progress-label");
+    const progressFill = document.querySelector("#progress-fill");
+    const progressTrack = document.querySelector(".progress-track");
 
     let classifierPromise;
 
     function setStatus(message) {
       status.textContent = message;
       console.log(message);
+    }
+
+    function updateProgress(percent) {
+      const clamped = Math.max(0, Math.min(100, percent));
+      progressLabel.textContent = `Progress: ${clamped}%`;
+      progressFill.style.width = `${clamped}%`;
+      progressTrack.setAttribute("aria-valuenow", String(clamped));
     }
 
     async function getClassifier() {
@@ -251,17 +293,23 @@ Maya Chen</textarea>
       runButton.disabled = true;
       output.textContent = "";
       redacted.textContent = "";
+      updateProgress(0);
 
       try {
+        setStatus("Starting...");
+        updateProgress(25);
         setStatus("Loading WebGPU model. The first run may download model files...");
         const classifier = await getClassifier();
 
+        updateProgress(50);
         setStatus("Running privacy filter...");
         const text = input.value;
+        updateProgress(75);
         const entities = await classifier(text, { aggregation_strategy: "simple" });
 
         redacted.textContent = redactText(text, entities);
         output.textContent = JSON.stringify(entities, null, 2);
+        updateProgress(100);
         setStatus("Done.");
       } catch (error) {
         console.error(error);
