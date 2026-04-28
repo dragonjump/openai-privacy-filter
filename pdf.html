@@ -78,7 +78,6 @@
     </div>
   </main>
   <script type="module">
-    import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers";
     import Tesseract from "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.esm.min.js";
     import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.5.136/build/pdf.mjs";
     import { PDFDocument, rgb } from "https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/+esm";
@@ -96,7 +95,7 @@
     const categoryList = document.querySelector("#category-list");
     const categoryShort = document.querySelector("#category-short");
 
-    let classifierPromise;
+    let modelUnavailableReason = "";
     let pdfBytes = null;
     let redactedPdfBytes = null;
     let pageRenders = [];
@@ -149,10 +148,6 @@
           .map((e) => String(e.word || "").trim())
           .filter(Boolean),
       )];
-    }
-    async function getClassifier() {
-      classifierPromise ??= pipeline("token-classification", "openai/privacy-filter", { device: "wasm" });
-      return classifierPromise;
     }
     async function getWorker() {
       workerPromise ??= Tesseract.createWorker("eng");
@@ -209,6 +204,28 @@
       }
       return [...matched];
     }
+
+    function regexEntitiesFromText(text) {
+      const entities = [];
+      const patterns = [
+        { key: "private_email", regex: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi },
+        { key: "private_phone", regex: /\b(?:\+?\d[\d\s().-]{6,}\d)\b/g },
+        { key: "private_date", regex: /\b(?:\d{4}[-/]\d{2}[-/]\d{2}|\d{1,2}[-/]\d{1,2}[-/]\d{2,4})\b/g },
+        { key: "private_url", regex: /\b(?:https?:\/\/|www\.)\S+\b/gi },
+        { key: "account_number", regex: /\b\d{3,}(?:[-\s]\d{2,})+\b/g },
+        { key: "sec", regex: /\b(?:api[_-]?key|secret|token|password|ssn)\b/gi },
+      ];
+      for (const pattern of patterns) {
+        for (const match of text.matchAll(pattern.regex)) {
+          entities.push({ entity_group: pattern.key, score: 1, word: match[0] });
+        }
+      }
+      return entities;
+    }
+
+    async function detectEntities(text) {
+      return regexEntitiesFromText(text);
+    }
     function cloneBytes(bytes) {
       return bytes instanceof Uint8Array ? bytes.slice() : new Uint8Array(bytes).slice();
     }
@@ -263,7 +280,7 @@
       return pdfDoc.save();
     }
 
-    async function redactRenderedPages(classifier, worker) {
+    async function redactRenderedPages(worker) {
       const allEntities = [];
       const pageSummaries = [];
       for (let pageIndex = 0; pageIndex < pageRenders.length; pageIndex++) {
@@ -271,7 +288,7 @@
         const { data } = await worker.recognize(render.canvas);
         const words = (data.words || []).filter((w) => (w.text || "").trim().length > 0 && w.bbox);
         const wordMap = buildWordMap(words.map((word) => ({ text: word.text })));
-        const entities = await classifier(wordMap.text, { aggregation_strategy: "simple" });
+        const entities = await detectEntities(wordMap.text);
         allEntities.push(...entities);
 
         const ctx = render.canvas.getContext("2d");
@@ -314,13 +331,13 @@
         setStatus("Rendering PDF pages...");
         updateProgress(25);
         await renderPdfPreview(pdfBytes);
-        setStatus("Loading OCR + privacy model...");
+        setStatus("Loading OCR worker...");
         updateProgress(50);
         const worker = await getWorker();
-        const classifier = await getClassifier();
+        modelUnavailableReason = "";
         setStatus("Detecting entities and redacting page images...");
         updateProgress(75);
-        const { allEntities, pageSummaries } = await redactRenderedPages(classifier, worker);
+        const { allEntities, pageSummaries } = await redactRenderedPages(worker);
         redactedPdfBytes = await buildPdfFromRenderedPages(pageRenders);
         latestEntities = allEntities;
         activeCategoryKey = "";
