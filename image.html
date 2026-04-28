@@ -397,7 +397,7 @@
       <aside class="category-panel" aria-label="Privacy category counters">
         <h3>Detected counts</h3>
         <div id="category-list" class="category-list"></div>
-        <div id="category-short" class="category-short">Click a count to view short label</div>
+        <div id="category-short" class="category-short">Click a count to view detected words</div>
       </aside>
     </div>
   </main>
@@ -433,6 +433,7 @@
     let selectedBoxIndex = -1;
     let interaction = null;
     let activeCategoryKey = "";
+    let latestEntities = [];
 
     const CATEGORY_CONFIG = [
       { key: "private_person", name: "Person", short: "PER" },
@@ -480,6 +481,14 @@
         if (Object.hasOwn(counts, key)) counts[key] += 1;
       }
       return counts;
+    }
+
+    function wordsForCategory(entities, key) {
+      const words = entities
+        .filter((entity) => String(entity.entity_group || "").toLowerCase() === key)
+        .map((entity) => String(entity.word || "").trim())
+        .filter((word) => word.length > 0);
+      return [...new Set(words)];
     }
 
     async function getClassifier() {
@@ -557,7 +566,8 @@
         setStatus("Image loaded. Click Detect + Redact.");
         output.textContent = "";
         activeCategoryKey = "";
-        categoryShort.textContent = "Click a count to view short label";
+        latestEntities = [];
+        categoryShort.textContent = "Click a count to view detected words";
         renderCategoryCounts(emptyCategoryCounts());
         samplePreviewMini.src = src;
         downloadBtn.disabled = true;
@@ -765,6 +775,7 @@
         updateProgress(75);
         const classifier = await getClassifier();
         const entities = await classifier(wordMap.text, { aggregation_strategy: "simple" });
+        latestEntities = entities;
 
         const redactionRects = [];
         for (const entity of entities) {
@@ -793,7 +804,7 @@
           boxes: redactionBoxes,
         }, null, 2);
         activeCategoryKey = "";
-        categoryShort.textContent = "Click a count to view short label";
+        categoryShort.textContent = "Click a count to view detected words";
         renderCategoryCounts(computeCategoryCounts(entities));
 
         updateProgress(100);
@@ -914,7 +925,9 @@
       const config = CATEGORY_CONFIG.find((entry) => entry.key === key);
       if (!config) return;
       activeCategoryKey = key;
-      categoryShort.textContent = `${config.name}: ${config.short}`;
+      const words = wordsForCategory(latestEntities, key);
+      const wordPreview = words.length ? words.join(", ") : "none";
+      categoryShort.textContent = `${config.short}: ${wordPreview}`;
       for (const button of categoryList.querySelectorAll(".category-item")) {
         button.classList.toggle("active", button.dataset.key === key);
       }
