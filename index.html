@@ -4,15 +4,20 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>WebGPU Privacy Redaction</title>
+  <link
+    rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
+  >
   <style>
     :root {
-      color-scheme: dark;
-      --bg: #0f172a;
-      --panel: #111827;
-      --text: #e5e7eb;
-      --muted: #9ca3af;
-      --accent: #38bdf8;
-      --border: #273449;
+      color-scheme: light;
+      --bg: #ffffff;
+      --panel: #ffffff;
+      --text: #130000;
+      --muted: #5a3a00;
+      --accent: #ffe600;
+      --accent-2: #ff1f1f;
+      --border: #130000;
     }
     /* https://huggingface.co/blog/openai-privacy-filter-web-apps */
     * {
@@ -22,9 +27,9 @@
     body {
       margin: 0;
       min-height: 100vh;
-      background: radial-gradient(circle at top, #1e3a8a 0, var(--bg) 42rem);
+      background: var(--bg);
       color: var(--text);
-      font-family: Arial, Helvetica, sans-serif;
+      font-family: "Arial Black", Arial, Helvetica, sans-serif;
       padding: 32px;
     }
 
@@ -33,14 +38,46 @@
       margin: 0 auto;
       padding: 24px;
       border: 1px solid var(--border);
-      border-radius: 18px;
-      background: rgba(17, 24, 39, 0.88);
-      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.32);
+      border-radius: 0;
+      background: var(--panel);
+      box-shadow: 12px 12px 0 #ff1f1f;
     }
 
     h1 {
       margin: 0 0 8px;
-      font-size: clamp(1.8rem, 4vw, 2.6rem);
+      font-size: clamp(2.5rem, 7vw, 4.3rem);
+      line-height: 1.05;
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+
+    .mode-switcher {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 0 0 14px;
+    }
+
+    .mode-btn {
+      margin: 0;
+      border: 2px solid #130000;
+      border-radius: 0;
+      padding: 10px 14px;
+      background: #fff6b8;
+      color: #130000;
+      font: 800 0.85rem/1 Arial, Helvetica, sans-serif;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      box-shadow: 4px 4px 0 #130000;
+      cursor: default;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .mode-btn.active {
+      background: var(--accent);
+      box-shadow: 6px 6px 0 var(--accent-2);
     }
 
     p {
@@ -51,11 +88,12 @@
     textarea,
     pre {
       width: 100%;
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      background: #020617;
-      color: var(--text);
-      font: 14px/1.5 Consolas, Monaco, monospace;
+      border: 3px solid #130000;
+      border-radius: 0;
+      background: #fffdf5;
+      color: #130000;
+      font: 700 15px/1.6 Arial, Helvetica, sans-serif;
+      box-shadow: 8px 8px 0 var(--accent), 14px 14px 0 var(--accent-2);
     }
 
     textarea {
@@ -66,18 +104,33 @@
 
     button {
       margin: 14px 0;
-      border: 0;
-      border-radius: 999px;
+      border: 2px solid #000;
+      border-radius: 0;
       padding: 12px 18px;
       background: var(--accent);
-      color: #082f49;
+      color: #000;
       font-weight: 700;
       cursor: pointer;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      box-shadow: 6px 6px 0 var(--accent-2);
     }
 
     button:disabled {
       cursor: wait;
       opacity: 0.65;
+    }
+
+    .offline-pill {
+      display: inline-block;
+      margin: 6px 0 12px;
+      padding: 8px 12px;
+      border: 2px solid #130000;
+      background: var(--accent);
+      color: #130000;
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      box-shadow: 5px 5px 0 var(--accent-2);
     }
 
     pre {
@@ -88,8 +141,9 @@
     }
 
     .status {
-      color: var(--accent);
+      color: var(--muted);
       min-height: 1.5em;
+      font-weight: 700;
     }
 
     .progress-wrap {
@@ -99,14 +153,14 @@
     .progress-label {
       margin: 0 0 6px;
       color: var(--text);
-      font: 13px/1.3 Consolas, Monaco, monospace;
+      font: 700 13px/1.3 Consolas, Monaco, monospace;
     }
 
     .progress-track {
       width: 100%;
       height: 10px;
-      border-radius: 999px;
-      background: #0b1220;
+      border-radius: 0;
+      background: #ffdede;
       border: 1px solid var(--border);
       overflow: hidden;
     }
@@ -114,19 +168,108 @@
     .progress-fill {
       width: 0%;
       height: 100%;
-      background: linear-gradient(90deg, #0ea5e9, #38bdf8);
+      background: linear-gradient(90deg, #ffe600, #ff1f1f);
       transition: width 260ms ease;
+    }
+
+    details {
+      margin-top: 20px;
+      border: 2px solid #130000;
+      background: #fff6b8;
+      box-shadow: 6px 6px 0 var(--accent-2);
+    }
+
+    summary {
+      cursor: pointer;
+      padding: 10px 12px;
+      font-weight: 700;
+      list-style: none;
+    }
+
+    summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .raw-output-wrap {
+      padding: 0 12px 12px;
+    }
+
+    .help-fab {
+      position: fixed;
+      right: 22px;
+      bottom: 22px;
+      width: 58px;
+      height: 58px;
+      border: 2px solid #130000;
+      border-radius: 50%;
+      background: var(--accent);
+      color: #130000;
+      font: 900 26px/1 Arial, Helvetica, sans-serif;
+      cursor: pointer;
+      box-shadow: 6px 6px 0 var(--accent-2);
+      z-index: 1000;
+    }
+
+    .help-modal[hidden] {
+      display: none;
+    }
+
+    .help-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(19, 0, 0, 0.45);
+      display: grid;
+      place-items: center;
+      z-index: 1001;
+      padding: 20px;
+    }
+
+    .help-card {
+      width: min(560px, 100%);
+      border: 3px solid #130000;
+      background: #fffdf5;
+      color: #130000;
+      box-shadow: 12px 12px 0 var(--accent-2);
+      padding: 18px 18px 14px;
+    }
+
+    .help-card h3 {
+      margin: 0 0 8px;
+      font-size: 1.35rem;
+      text-transform: uppercase;
+    }
+
+    .help-card p {
+      margin: 0 0 10px;
+      color: #130000;
+      font-family: Arial, Helvetica, sans-serif;
+      font-weight: 700;
+    }
+
+    .help-actions {
+      display: flex;
+      justify-content: flex-end;
+    }
+
+    .help-actions button {
+      margin: 0;
     }
   </style>
 </head>
 <body>
   <main>
+    <div class="mode-switcher" aria-label="Input mode switcher">
+      <button class="mode-btn active" type="button" aria-pressed="true"><i class="fa-solid fa-font" aria-hidden="true"></i> Text</button>
+      <button class="mode-btn" type="button" aria-pressed="false"><i class="fa-solid fa-file-pdf" aria-hidden="true"></i> PDF</button>
+      <button class="mode-btn" type="button" aria-pressed="false"><i class="fa-solid fa-image" aria-hidden="true"></i> Image</button>
+      <button class="mode-btn" type="button" aria-pressed="false"><i class="fa-solid fa-music" aria-hidden="true"></i> Sound</button>
+    </div>
     <h1>WebGPU Privacy Redaction</h1>
+    <div class="offline-pill">Offline-first: works even without Wi-Fi after model cache</div>
     <p>
-      This page loads Transformers.js in the browser and runs
-      <code>openai/privacy-filter</code> with <code>device: "webgpu"</code> and
-      <code>dtype: "q4"</code>. Detected spans are replaced with bracketed labels from the model
-      (for example <code>[PRIVATE_PERSON]</code>), not a generic token.
+      Paste text, click redact, and sensitive details get replaced with safe tags like
+      <code>[PRIVATE_PERSON]</code> and <code>[PRIVATE_EMAIL]</code>. After the first load, it keeps working
+      from local cache for an offline-first flow.
     </p>
 
     <textarea id="input">Subject: Q2 Planning Follow-Up
@@ -150,10 +293,32 @@ Maya Chen</textarea>
 
     <h2>Redacted Text</h2>
     <pre id="redacted"></pre>
+<p><br/><br/></p>
+    <details>
 
-    <h2>Raw Model Output</h2>
-    <pre id="output"></pre>
+      <summary>Raw Model Output (collapsed by default)</summary>
+      <div class="raw-output-wrap">
+        <pre id="output"></pre>
+      </div>
+    </details>
   </main>
+
+  <button id="help-fab" class="help-fab" type="button" aria-label="Open info dialog">?</button>
+  <div id="help-modal" class="help-modal" hidden>
+    <div class="help-card" role="dialog" aria-modal="true" aria-labelledby="help-title">
+      <h3 id="help-title">What is this?</h3>
+      <p>
+        This tool redacts private information in text directly in your browser.
+        It is designed for quick masking before sharing notes, emails, or logs.
+      </p>
+      <p>
+        Need help or want changes? Contact: <a href="mailto:lseanlon@gmail.com">lseanlon@gmail.com</a>
+      </p>
+      <div class="help-actions">
+        <button id="close-help" type="button">Close</button>
+      </div>
+    </div>
+  </div>
 
   <script type="module">
     import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers";
@@ -166,6 +331,9 @@ Maya Chen</textarea>
     const progressLabel = document.querySelector("#progress-label");
     const progressFill = document.querySelector("#progress-fill");
     const progressTrack = document.querySelector(".progress-track");
+    const helpFab = document.querySelector("#help-fab");
+    const helpModal = document.querySelector("#help-modal");
+    const closeHelp = document.querySelector("#close-help");
 
     let classifierPromise;
 
@@ -179,6 +347,14 @@ Maya Chen</textarea>
       progressLabel.textContent = `Progress: ${clamped}%`;
       progressFill.style.width = `${clamped}%`;
       progressTrack.setAttribute("aria-valuenow", String(clamped));
+    }
+
+    function openHelpModal() {
+      helpModal.hidden = false;
+    }
+
+    function closeHelpModal() {
+      helpModal.hidden = true;
     }
 
     async function getClassifier() {
@@ -317,6 +493,15 @@ Maya Chen</textarea>
       } finally {
         runButton.disabled = false;
       }
+    });
+
+    helpFab.addEventListener("click", openHelpModal);
+    closeHelp.addEventListener("click", closeHelpModal);
+    helpModal.addEventListener("click", (event) => {
+      if (event.target === helpModal) closeHelpModal();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !helpModal.hidden) closeHelpModal();
     });
   </script>
 </body>
