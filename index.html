@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WebGPU Privacy Redaction</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f172a;
+      --panel: #111827;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --accent: #38bdf8;
+      --border: #273449;
+    }
+    /* https://huggingface.co/blog/openai-privacy-filter-web-apps */
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(circle at top, #1e3a8a 0, var(--bg) 42rem);
+      color: var(--text);
+      font-family: Arial, Helvetica, sans-serif;
+      padding: 32px;
+    }
+
+    main {
+      width: min(900px, 100%);
+      margin: 0 auto;
+      padding: 24px;
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      background: rgba(17, 24, 39, 0.88);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.32);
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(1.8rem, 4vw, 2.6rem);
+    }
+
+    p {
+      color: var(--muted);
+      line-height: 1.55;
+    }
+
+    textarea,
+    pre {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: #020617;
+      color: var(--text);
+      font: 14px/1.5 Consolas, Monaco, monospace;
+    }
+
+    textarea {
+      min-height: 120px;
+      padding: 14px;
+      resize: vertical;
+    }
+
+    button {
+      margin: 14px 0;
+      border: 0;
+      border-radius: 999px;
+      padding: 12px 18px;
+      background: var(--accent);
+      color: #082f49;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      cursor: wait;
+      opacity: 0.65;
+    }
+
+    pre {
+      min-height: 56px;
+      overflow: auto;
+      padding: 14px;
+      white-space: pre-wrap;
+    }
+
+    .status {
+      color: var(--accent);
+      min-height: 1.5em;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>WebGPU Privacy Redaction</h1>
+    <p>
+      This page loads Transformers.js in the browser and runs
+      <code>openai/privacy-filter</code> with <code>device: "webgpu"</code> and
+      <code>dtype: "q4"</code>. Detected spans are replaced with bracketed labels from the model
+      (for example <code>[PRIVATE_PERSON]</code>), not a generic token.
+    </p>
+
+    <textarea id="input">Subject: Q2 Planning Follow-Up
+
+Hi Jordan,
+
+Thanks again for meeting earlier today. I wanted to follow up with the revised timeline for the Q2 rollout and confirm that the product launch is scheduled for September 18, 2026. For reference, the project file is listed under 4829-1037-5581. If anything changes on your side, feel free to reply here at maya.chen@example.com or call me at +1 (415) 555-0124.
+
+Best,
+
+Maya Chen</textarea>
+    <button id="run" type="button">Load Model and Redact</button>
+
+    <p id="status" class="status">Ready.</p>
+
+    <h2>Redacted Text</h2>
+    <pre id="redacted"></pre>
+
+    <h2>Raw Model Output</h2>
+    <pre id="output"></pre>
+  </main>
+
+  <script type="module">
+    import { pipeline } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers";
+
+    const input = document.querySelector("#input");
+    const runButton = document.querySelector("#run");
+    const status = document.querySelector("#status");
+    const redacted = document.querySelector("#redacted");
+    const output = document.querySelector("#output");
+
+    let classifierPromise;
+
+    function setStatus(message) {
+      status.textContent = message;
+      console.log(message);
+    }
+
+    async function getClassifier() {
+      if (!("gpu" in navigator)) {
+        throw new Error("WebGPU is not available in this browser. Try Chrome or Edge with WebGPU enabled.");
+      }
+
+      classifierPromise ??= pipeline(
+        "token-classification",
+        "openai/privacy-filter",
+        { device: "webgpu", dtype: "q4" },
+      );
+
+      return classifierPromise;
+    }
+
+    function bracketLabel(entity) {
+      const raw = entity.entity_group ?? entity.entity ?? "PRIVATE";
+      const key = String(raw)
+        .trim()
+        .replace(/-/g, "_")
+        .replace(/\s+/g, "_")
+        .replace(/_+/g, "_")
+        .toUpperCase();
+      return `[${key}]`;
+    }
+
+    function spanForEntity(text, entity) {
+      if (
+        Number.isInteger(entity.start) &&
+        Number.isInteger(entity.end) &&
+        entity.end > entity.start
+      ) {
+        return {
+          start: entity.start,
+          end: entity.end,
+          label: bracketLabel(entity),
+        };
+      }
+
+      const word = entity.word;
+      if (typeof word !== "string" || word.length === 0) return null;
+
+      let idx = text.indexOf(word);
+      if (idx !== -1) {
+        return { start: idx, end: idx + word.length, label: bracketLabel(entity) };
+      }
+
+      const trimmed = word.trim();
+      if (trimmed.length > 0) {
+        idx = text.indexOf(trimmed);
+        if (idx !== -1) {
+          return { start: idx, end: idx + trimmed.length, label: bracketLabel(entity) };
+        }
+      }
+
+      return null;
+    }
+
+    function mergeOverlappingSpans(spans) {
+      if (spans.length === 0) return [];
+      const sorted = spans.slice().sort((a, b) => a.start - b.start);
+      const merged = [{ ...sorted[0] }];
+      for (let i = 1; i < sorted.length; i++) {
+        const cur = sorted[i];
+        const last = merged[merged.length - 1];
+        if (cur.start <= last.end) {
+          last.end = Math.max(last.end, cur.end);
+        } else {
+          merged.push({ ...cur });
+        }
+      }
+      return merged;
+    }
+
+    /** Join spans with the same label when only whitespace sits between them (e.g. "Maya" + " Chen"). */
+    function mergeAdjacentSameLabel(text, spans) {
+      if (spans.length === 0) return [];
+      const sorted = spans.slice().sort((a, b) => a.start - b.start);
+      const out = [{ ...sorted[0] }];
+      for (let i = 1; i < sorted.length; i++) {
+        const cur = sorted[i];
+        const prev = out[out.length - 1];
+        const gap = text.slice(prev.end, cur.start);
+        if (prev.label === cur.label && /^\s*$/.test(gap)) {
+          prev.end = cur.end;
+        } else {
+          out.push({ ...cur });
+        }
+      }
+      return out;
+    }
+
+    function redactText(text, entities) {
+      const spans = [];
+      for (const entity of entities) {
+        const span = spanForEntity(text, entity);
+        if (span) spans.push(span);
+      }
+
+      const merged = mergeAdjacentSameLabel(text, mergeOverlappingSpans(spans)).sort(
+        (a, b) => b.start - a.start,
+      );
+      let result = text;
+      for (const { start, end, label } of merged) {
+        result = `${result.slice(0, start)}${label}${result.slice(end)}`;
+      }
+      return result;
+    }
+
+    runButton.addEventListener("click", async () => {
+      runButton.disabled = true;
+      output.textContent = "";
+      redacted.textContent = "";
+
+      try {
+        setStatus("Loading WebGPU model. The first run may download model files...");
+        const classifier = await getClassifier();
+
+        setStatus("Running privacy filter...");
+        const text = input.value;
+        const entities = await classifier(text, { aggregation_strategy: "simple" });
+
+        redacted.textContent = redactText(text, entities);
+        output.textContent = JSON.stringify(entities, null, 2);
+        setStatus("Done.");
+      } catch (error) {
+        console.error(error);
+        setStatus(`Error: ${error.message}`);
+      } finally {
+        runButton.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
