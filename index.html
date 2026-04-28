@@ -194,6 +194,63 @@
       padding: 0 12px 12px;
     }
 
+    .workspace-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 250px;
+      gap: 16px;
+      align-items: start;
+    }
+
+    .category-panel {
+      border: 2px solid #130000;
+      background: #fff6b8;
+      box-shadow: 6px 6px 0 var(--accent-2);
+      padding: 10px;
+      position: sticky;
+      top: 10px;
+    }
+
+    .category-panel h3 {
+      margin: 0 0 8px;
+      font-size: 0.95rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .category-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .category-item {
+      width: 100%;
+      border: 2px solid #130000;
+      background: #fffdf5;
+      color: #130000;
+      padding: 8px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font: 700 0.78rem/1.2 Arial, Helvetica, sans-serif;
+      cursor: pointer;
+      text-transform: uppercase;
+      margin: 0;
+      box-shadow: none;
+    }
+
+    .category-item.active {
+      background: var(--accent);
+      box-shadow: 4px 4px 0 var(--accent-2);
+    }
+
+    .category-short {
+      margin-top: 8px;
+      min-height: 1.2em;
+      color: #130000;
+      font: 800 0.78rem/1.2 Arial, Helvetica, sans-serif;
+      text-transform: uppercase;
+    }
+
     .help-fab {
       position: fixed;
       right: 22px;
@@ -254,6 +311,16 @@
     .help-actions button {
       margin: 0;
     }
+
+    @media (max-width: 980px) {
+      .workspace-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .category-panel {
+        position: static;
+      }
+    }
   </style>
 </head>
 <body>
@@ -272,7 +339,9 @@
       from local cache for an offline-first flow.
     </p>
 
-    <textarea id="input">Subject: Q2 Planning Follow-Up
+    <div class="workspace-grid">
+      <div>
+        <textarea id="input">Subject: Q2 Planning Follow-Up
 
 Hi Jordan,
 
@@ -281,26 +350,32 @@ Thanks again for meeting earlier today. I wanted to follow up with the revised t
 Best,
 
 Maya Chen</textarea>
-    <button id="run" type="button">Load Model and Redact</button>
+        <button id="run" type="button">Load Model and Redact</button>
 
-    <p id="status" class="status">Ready.</p>
-    <div class="progress-wrap" aria-live="polite">
-      <p id="progress-label" class="progress-label">Progress: 0%</p>
-      <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-        <div id="progress-fill" class="progress-fill"></div>
+        <p id="status" class="status">Ready.</p>
+        <div class="progress-wrap" aria-live="polite">
+          <p id="progress-label" class="progress-label">Progress: 0%</p>
+          <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+            <div id="progress-fill" class="progress-fill"></div>
+          </div>
+        </div>
+
+        <h2>Redacted Text</h2>
+        <pre id="redacted"></pre>
+        <p><br><br></p>
+        <details>
+          <summary>Raw Model Output (collapsed by default)</summary>
+          <div class="raw-output-wrap">
+            <pre id="output"></pre>
+          </div>
+        </details>
       </div>
+      <aside class="category-panel" aria-label="Privacy category counters">
+        <h3>Detected counts</h3>
+        <div id="category-list" class="category-list"></div>
+        <div id="category-short" class="category-short">Click a count to view detected words</div>
+      </aside>
     </div>
-
-    <h2>Redacted Text</h2>
-    <pre id="redacted"></pre>
-<p><br/><br/></p>
-    <details>
-
-      <summary>Raw Model Output (collapsed by default)</summary>
-      <div class="raw-output-wrap">
-        <pre id="output"></pre>
-      </div>
-    </details>
   </main>
 
   <button id="help-fab" class="help-fab" type="button" aria-label="Open info dialog">?</button>
@@ -331,11 +406,26 @@ Maya Chen</textarea>
     const progressLabel = document.querySelector("#progress-label");
     const progressFill = document.querySelector("#progress-fill");
     const progressTrack = document.querySelector(".progress-track");
+    const categoryList = document.querySelector("#category-list");
+    const categoryShort = document.querySelector("#category-short");
     const helpFab = document.querySelector("#help-fab");
     const helpModal = document.querySelector("#help-modal");
     const closeHelp = document.querySelector("#close-help");
 
     let classifierPromise;
+    let activeCategoryKey = "";
+    let latestEntities = [];
+
+    const CATEGORY_CONFIG = [
+      { key: "private_person", name: "Person", short: "PER" },
+      { key: "private_email", name: "Email", short: "EML" },
+      { key: "private_date", name: "Date", short: "DAT" },
+      { key: "private_address", name: "Address", short: "ADR" },
+      { key: "account_number", name: "Account", short: "ACC" },
+      { key: "private_url", name: "URL", short: "URL" },
+      { key: "private_phone", name: "Phone", short: "PHN" },
+      { key: "sec", name: "Secret", short: "SEC" },
+    ];
 
     function setStatus(message) {
       status.textContent = message;
@@ -347,6 +437,39 @@ Maya Chen</textarea>
       progressLabel.textContent = `Progress: ${clamped}%`;
       progressFill.style.width = `${clamped}%`;
       progressTrack.setAttribute("aria-valuenow", String(clamped));
+    }
+
+    function emptyCategoryCounts() {
+      return Object.fromEntries(CATEGORY_CONFIG.map((item) => [item.key, 0]));
+    }
+
+    function renderCategoryCounts(counts) {
+      categoryList.innerHTML = "";
+      for (const item of CATEGORY_CONFIG) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = `category-item${activeCategoryKey === item.key ? " active" : ""}`;
+        button.dataset.key = item.key;
+        button.innerHTML = `<span>${item.name}</span><span>${counts[item.key] ?? 0}</span>`;
+        categoryList.appendChild(button);
+      }
+    }
+
+    function computeCategoryCounts(entities) {
+      const counts = emptyCategoryCounts();
+      for (const entity of entities) {
+        const key = String(entity.entity_group || "").toLowerCase();
+        if (Object.hasOwn(counts, key)) counts[key] += 1;
+      }
+      return counts;
+    }
+
+    function wordsForCategory(entities, key) {
+      const words = entities
+        .filter((entity) => String(entity.entity_group || "").toLowerCase() === key)
+        .map((entity) => String(entity.word || "").trim())
+        .filter((word) => word.length > 0);
+      return [...new Set(words)];
     }
 
     function openHelpModal() {
@@ -482,9 +605,13 @@ Maya Chen</textarea>
         const text = input.value;
         updateProgress(75);
         const entities = await classifier(text, { aggregation_strategy: "simple" });
+        latestEntities = entities;
 
         redacted.textContent = redactText(text, entities);
         output.textContent = JSON.stringify(entities, null, 2);
+        activeCategoryKey = "";
+        categoryShort.textContent = "Click a count to view detected words";
+        renderCategoryCounts(computeCategoryCounts(entities));
         updateProgress(100);
         setStatus("Done.");
       } catch (error) {
@@ -497,12 +624,27 @@ Maya Chen</textarea>
 
     helpFab.addEventListener("click", openHelpModal);
     closeHelp.addEventListener("click", closeHelpModal);
+    categoryList.addEventListener("click", (event) => {
+      const item = event.target.closest(".category-item");
+      if (!item) return;
+      const key = item.dataset.key;
+      const config = CATEGORY_CONFIG.find((entry) => entry.key === key);
+      if (!config) return;
+      activeCategoryKey = key;
+      const words = wordsForCategory(latestEntities, key);
+      const wordPreview = words.length ? words.join(", ") : "none";
+      categoryShort.textContent = `${config.short}: ${wordPreview}`;
+      for (const button of categoryList.querySelectorAll(".category-item")) {
+        button.classList.toggle("active", button.dataset.key === key);
+      }
+    });
     helpModal.addEventListener("click", (event) => {
       if (event.target === helpModal) closeHelpModal();
     });
     document.addEventListener("keydown", (event) => {
       if (event.key === "Escape" && !helpModal.hidden) closeHelpModal();
     });
+    renderCategoryCounts(emptyCategoryCounts());
   </script>
 </body>
 </html>
