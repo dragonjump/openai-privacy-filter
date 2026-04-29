@@ -140,6 +140,13 @@
       white-space: pre-wrap;
     }
 
+    .redact-hit {
+      background: #ff1f1f;
+      color: #ffffff;
+      padding: 0 2px;
+      border-radius: 2px;
+    }
+
     .status {
       color: var(--muted);
       min-height: 1.5em;
@@ -415,6 +422,7 @@ Maya Chen</textarea>
     let classifierPromise;
     let activeCategoryKey = "";
     let latestEntities = [];
+    let lastInputText = "";
 
     const CATEGORY_CONFIG = [
       { key: "private_person", name: "Person", short: "PER" },
@@ -515,6 +523,7 @@ Maya Chen</textarea>
           start: entity.start,
           end: entity.end,
           label: bracketLabel(entity),
+          categoryKey: String(entity.entity_group || entity.entity || "").toLowerCase(),
         };
       }
 
@@ -523,14 +532,24 @@ Maya Chen</textarea>
 
       let idx = text.indexOf(word);
       if (idx !== -1) {
-        return { start: idx, end: idx + word.length, label: bracketLabel(entity) };
+        return {
+          start: idx,
+          end: idx + word.length,
+          label: bracketLabel(entity),
+          categoryKey: String(entity.entity_group || entity.entity || "").toLowerCase(),
+        };
       }
 
       const trimmed = word.trim();
       if (trimmed.length > 0) {
         idx = text.indexOf(trimmed);
         if (idx !== -1) {
-          return { start: idx, end: idx + trimmed.length, label: bracketLabel(entity) };
+          return {
+            start: idx,
+            end: idx + trimmed.length,
+            label: bracketLabel(entity),
+            categoryKey: String(entity.entity_group || entity.entity || "").toLowerCase(),
+          };
         }
       }
 
@@ -572,6 +591,11 @@ Maya Chen</textarea>
     }
 
     function redactText(text, entities) {
+      const escaped = (value) => value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+
       const spans = [];
       for (const entity of entities) {
         const span = spanForEntity(text, entity);
@@ -579,13 +603,21 @@ Maya Chen</textarea>
       }
 
       const merged = mergeAdjacentSameLabel(text, mergeOverlappingSpans(spans)).sort(
-        (a, b) => b.start - a.start,
+        (a, b) => a.start - b.start,
       );
-      let result = text;
-      for (const { start, end, label } of merged) {
-        result = `${result.slice(0, start)}${label}${result.slice(end)}`;
+
+      let cursor = 0;
+      const parts = [];
+      for (const { start, end, label, categoryKey } of merged) {
+        parts.push(escaped(text.slice(cursor, start)));
+        const highlighted = activeCategoryKey && categoryKey === activeCategoryKey;
+        const safeLabel = escaped(label);
+        const spacedLabel = ` ${safeLabel} `;
+        parts.push(highlighted ? `<mark class="redact-hit">${spacedLabel}</mark>` : spacedLabel);
+        cursor = end;
       }
-      return result;
+      parts.push(escaped(text.slice(cursor)));
+      return parts.join("").replace(/\s{2,}/g, " ");
     }
 
     runButton.addEventListener("click", async () => {
@@ -603,11 +635,12 @@ Maya Chen</textarea>
         updateProgress(50);
         setStatus("Running privacy filter...");
         const text = input.value;
+        lastInputText = text;
         updateProgress(75);
         const entities = await classifier(text, { aggregation_strategy: "simple" });
         latestEntities = entities;
 
-        redacted.textContent = redactText(text, entities);
+        redacted.innerHTML = redactText(text, entities);
         output.textContent = JSON.stringify(entities, null, 2);
         activeCategoryKey = "";
         categoryShort.textContent = "Click a count to view detected words";
@@ -634,6 +667,7 @@ Maya Chen</textarea>
       const words = wordsForCategory(latestEntities, key);
       const wordPreview = words.length ? words.join(", ") : "none";
       categoryShort.textContent = `${config.short}: ${wordPreview}`;
+      if (lastInputText) redacted.innerHTML = redactText(lastInputText, latestEntities);
       for (const button of categoryList.querySelectorAll(".category-item")) {
         button.classList.toggle("active", button.dataset.key === key);
       }
