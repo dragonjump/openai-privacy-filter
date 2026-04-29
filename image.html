@@ -171,6 +171,8 @@
 
     .sample-preview-mini {
       display: inline-flex;
+      opacity: 0.1;
+      width: 1px;height: 1px;
       align-items: center;
       gap: 8px;
       font: 700 12px/1.2 Arial, sans-serif;
@@ -377,7 +379,7 @@
         <section id="sample-panel" class="sample-panel" aria-label="Sample images">
           <div class="sample-panel-head">
             <div class="sample-preview-mini">
-              <img id="sample-preview-mini" alt="Current sample preview">
+              <img id="sample-preview-mini" alt=" " src="">
               <span>Sample preview</span>
             </div>
             <button id="sample-toggle-btn" class="sample-toggle-btn" type="button">Expand Samples</button>
@@ -627,6 +629,57 @@
       return { text: chunks.join(""), entries };
     }
 
+    function heuristicPersonEntities(text) {
+      const entities = [];
+      const nameLineRegex = /\b(?:name|beneficiary\s*name|recipient\s*name|customer\s*name)\s*:\s*([A-Z][A-Z\s.'-]{2,60})/gi;
+      for (const match of text.matchAll(nameLineRegex)) {
+        const captured = String(match[1] || "").trim().replace(/\s+/g, " ");
+        if (!captured) continue;
+        const parts = captured.split(" ").filter(Boolean);
+        if (parts.length < 2) continue;
+        const full = String(match[0]);
+        const capIndex = full.lastIndexOf(match[1]);
+        if (!Number.isInteger(match.index) || capIndex < 0) continue;
+        const start = match.index + capIndex;
+        entities.push({
+          entity_group: "private_person",
+          score: 1,
+          word: captured,
+          start,
+          end: start + captured.length,
+        });
+      }
+
+      // Standalone uppercase full names (e.g. "ROWAN SEBASTIAN") without a Name: label.
+      const standaloneNameRegex = /\b([A-Z]{3,}(?:\s+[A-Z]{2,}){1,3})\b/g;
+      const blocked = new Set([
+        "KAD PENGENALAN",
+        "MALAYSIA",
+        "PUBLIC BANK",
+        "DUITNOW TRANSFER",
+        "TRANSACTION DATE",
+        "REFERENCE NUMBER",
+      ]);
+      for (const match of text.matchAll(standaloneNameRegex)) {
+        const captured = String(match[1] || "").trim().replace(/\s+/g, " ");
+        if (!captured || blocked.has(captured)) continue;
+        const tokens = captured.split(" ").filter(Boolean);
+        if (tokens.length < 2) continue;
+        // Avoid obviously numeric-heavy fragments from noisy OCR.
+        const hasDigit = /\d/.test(captured);
+        if (hasDigit) continue;
+        if (!Number.isInteger(match.index)) continue;
+        entities.push({
+          entity_group: "private_person",
+          score: 0.9,
+          word: captured,
+          start: match.index,
+          end: match.index + captured.length,
+        });
+      }
+      return entities;
+    }
+
     function findWordIndexesForEntity(entity, wordMap, ocrWords) {
       const matched = new Set();
       if (Number.isInteger(entity.start) && Number.isInteger(entity.end)) {
@@ -785,7 +838,9 @@
         setStatus("Detecting privacy entities...");
         updateProgress(75);
         const classifier = await getClassifier();
-        const entities = await classifier(wordMap.text, { aggregation_strategy: "simple" });
+        const modelEntities = await classifier(wordMap.text, { aggregation_strategy: "simple" });
+        const heuristicEntities = heuristicPersonEntities(wordMap.text);
+        const entities = [...modelEntities, ...heuristicEntities];
         latestEntities = entities;
         const beforeText = wordMap.text;
         const afterWords = ocrWords.map((w) => String(w.text || ""));
@@ -990,7 +1045,7 @@
 
     renderGallery();
     renderCategoryCounts(emptyCategoryCounts());
-    loadImageFromSrc(samples[0].src);
+    setStatus("Ready. Upload an image or expand samples to choose manually.");
   </script>
 </body>
 </html>
