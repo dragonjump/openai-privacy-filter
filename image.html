@@ -129,6 +129,7 @@
 
     .status { margin-top: 8px; min-height: 1.4em; color: var(--muted); }
     .progress-wrap { margin: 8px 0 14px; }
+    .progress-wrap.is-hidden { display: none; }
     .progress-label { margin: 0 0 6px; color: var(--text); font: 700 13px/1.3 Consolas, monospace; }
     .progress-track {
       width: 100%; height: 10px; background: #ffdede; border: 1px solid var(--border); overflow: hidden;
@@ -304,6 +305,10 @@
       outline: 3px dashed #ffe600;
     }
 
+    .redaction-box.highlight {
+      background: #ff1f1f !important;
+    }
+
     .redaction-resize {
       position: absolute;
       width: 12px;
@@ -360,7 +365,7 @@
     </div>
 
     <div id="status" class="status">Ready. Choose a sample or upload your image.</div>
-    <div class="progress-wrap" aria-live="polite">
+    <div class="progress-wrap is-hidden" aria-live="polite">
       <p id="progress-label" class="progress-label">Progress: 0%</p>
       <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
         <div id="progress-fill" class="progress-fill"></div>
@@ -415,6 +420,7 @@
     const progressLabel = document.querySelector("#progress-label");
     const progressFill = document.querySelector("#progress-fill");
     const progressTrack = document.querySelector(".progress-track");
+    const progressWrap = document.querySelector(".progress-wrap");
     const gallery = document.querySelector("#gallery");
     const samplePanel = document.querySelector("#sample-panel");
     const sampleToggleBtn = document.querySelector("#sample-toggle-btn");
@@ -456,6 +462,7 @@
       progressLabel.textContent = `Progress: ${clamped}%`;
       progressFill.style.width = `${clamped}%`;
       progressTrack.setAttribute("aria-valuenow", String(clamped));
+      progressWrap.classList.toggle("is-hidden", clamped === 0);
     }
 
     function emptyCategoryCounts() {
@@ -552,7 +559,7 @@
         const card = document.createElement("button");
         card.className = "gallery-card";
         card.type = "button";
-        card.innerHTML = `<img src="${sample.src}" alt="${sample.name}"><span>${sample.name}</span>`;
+        card.innerHTML = `<img src="${sample.src}" alt="${sample.name}"><span> </span>`;
         card.addEventListener("click", async () => loadImageFromSrc(sample.src));
         gallery.appendChild(card);
       }
@@ -563,7 +570,7 @@
       img.onload = () => {
         currentImage = img;
         drawImage(img);
-        setStatus("Image loaded. Click Detect + Redact.");
+        setStatus("Image loaded. Auto-starting redaction...");
         output.textContent = "";
         activeCategoryKey = "";
         latestEntities = [];
@@ -571,6 +578,9 @@
         renderCategoryCounts(emptyCategoryCounts());
         samplePreviewMini.src = src;
         downloadBtn.disabled = true;
+        setTimeout(() => {
+          if (!runButton.disabled && currentImage) runButton.click();
+        }, 500);
       };
       img.onerror = () => setStatus("Could not load image.");
       img.src = src;
@@ -723,7 +733,8 @@
       for (let i = 0; i < redactionBoxes.length; i++) {
         const box = redactionBoxes[i];
         const el = document.createElement("div");
-        el.className = `redaction-box${i === selectedBoxIndex ? " selected" : ""}`;
+        const highlighted = activeCategoryKey && box.categoryKey === activeCategoryKey;
+        el.className = `redaction-box${i === selectedBoxIndex ? " selected" : ""}${highlighted ? " highlight" : ""}`;
         el.dataset.index = String(i);
         el.style.left = `${box.x * sx}px`;
         el.style.top = `${box.y * sy}px`;
@@ -776,23 +787,49 @@
         const classifier = await getClassifier();
         const entities = await classifier(wordMap.text, { aggregation_strategy: "simple" });
         latestEntities = entities;
+        const beforeText = wordMap.text;
+        const afterWords = ocrWords.map((w) => String(w.text || ""));
+        const debugOriginal = [];
+        const debugTargets = [];
 
         const redactionRects = [];
+        const redactionMeta = [];
+        for (const word of ocrWords) {
+          const rect = rectFromBbox(word.bbox);
+          debugOriginal.push({
+            text: word.text,
+            bbox: { x: rect.x, y: rect.y, w: rect.w, h: rect.h },
+          });
+        }
         for (const entity of entities) {
           const hitIndexes = findWordIndexesForEntity(entity, wordMap, ocrWords);
           for (const idx of hitIndexes) {
-            redactionRects.push(rectFromBbox(ocrWords[idx].bbox));
+            const rect = rectFromBbox(ocrWords[idx].bbox);
+            redactionRects.push(rect);
+            redactionMeta.push({
+              categoryKey: String(entity.entity_group || "").toLowerCase(),
+              matchedWord: ocrWords[idx].text,
+              entityWord: entity.word,
+            });
+            afterWords[idx] = "[REDACTED]";
+            debugTargets.push({
+              category: String(entity.entity_group || "").toLowerCase(),
+              matchedWord: ocrWords[idx].text,
+              entityWord: entity.word,
+              bbox: { x: rect.x, y: rect.y, w: rect.w, h: rect.h },
+            });
           }
         }
+        const afterText = afterWords.join(" ");
 
         drawImage(currentImage);
-        const merged = mergeRects(redactionRects);
-        redactionBoxes = merged.map((r) => ({
+        redactionBoxes = redactionRects.map((r, i) => ({
           x: Math.max(0, r.x - 2),
           y: Math.max(0, r.y - 2),
           w: r.w + 4,
           h: r.h + 4,
           color: redactionColorInput.value || "#000000",
+          categoryKey: redactionMeta[i]?.categoryKey ?? "",
         }));
         selectBox(redactionBoxes.length ? 0 : -1);
         renderRedactionBoxes();
@@ -802,13 +839,23 @@
           ocr_word_count: ocrWords.length,
           redaction_box_count: redactionBoxes.length,
           boxes: redactionBoxes,
+          debug_original_bbox_count: debugOriginal.length,
+          debug_target_bbox_count: debugTargets.length,
         }, null, 2);
+        console.group("Image OCR/Redaction debug");
+        console.log("Extracted text (before redaction):", beforeText);
+        console.log("Extracted text (after redaction):", afterText);
+        console.log("Original OCR word bounding boxes:", debugOriginal);
+        console.log("Redaction target bounding boxes:", debugTargets);
+        console.table(debugOriginal.slice(0, 200));
+        console.table(debugTargets.slice(0, 200));
+        console.groupEnd();
         activeCategoryKey = "";
         categoryShort.textContent = "Click a count to view detected words";
         renderCategoryCounts(computeCategoryCounts(entities));
 
         updateProgress(100);
-        setStatus(`Done. Redacted ${merged.length} region(s).`);
+        setStatus(`Done. Redacted ${redactionBoxes.length} region(s).`);
         downloadBtn.disabled = false;
       } catch (error) {
         console.error(error);
@@ -931,6 +978,7 @@
       for (const button of categoryList.querySelectorAll(".category-item")) {
         button.classList.toggle("active", button.dataset.key === key);
       }
+      renderRedactionBoxes();
     });
 
     sampleToggleBtn.addEventListener("click", () => {
