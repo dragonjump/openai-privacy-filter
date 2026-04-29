@@ -147,6 +147,20 @@
       border-radius: 2px;
     }
 
+    .redacted-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .copy-btn {
+      margin: 0;
+      padding: 8px 12px;
+      font-size: 0.78rem;
+      box-shadow: 4px 4px 0 var(--accent-2);
+    }
+
     .status {
       color: var(--muted);
       min-height: 1.5em;
@@ -338,6 +352,7 @@
       <button class="mode-btn" type="button" aria-pressed="false"><i class="fa-solid fa-image" aria-hidden="true"></i> Image</button>
       <button class="mode-btn" type="button" aria-pressed="false"><i class="fa-solid fa-music" aria-hidden="true"></i> Sound</button>
     </div>
+    <h2> 100% Offline Secure, No Data is stored in server, Just in your computer locally</h2>
     <h1>WebGPU Privacy Redaction</h1>
     <div class="offline-pill">Offline-first: works even without Wi-Fi after model cache</div>
     <p>
@@ -367,7 +382,10 @@ Maya Chen</textarea>
           </div>
         </div>
 
-        <h2>Redacted Text</h2>
+        <div class="redacted-head">
+          <h2>Redacted Text</h2>
+          <button id="copy-redacted" class="copy-btn" type="button">Copy Redacted</button>
+        </div>
         <pre id="redacted"></pre>
         <p><br><br></p>
         <details>
@@ -409,6 +427,7 @@ Maya Chen</textarea>
     const runButton = document.querySelector("#run");
     const status = document.querySelector("#status");
     const redacted = document.querySelector("#redacted");
+    const copyRedactedButton = document.querySelector("#copy-redacted");
     const output = document.querySelector("#output");
     const progressLabel = document.querySelector("#progress-label");
     const progressFill = document.querySelector("#progress-fill");
@@ -423,6 +442,7 @@ Maya Chen</textarea>
     let activeCategoryKey = "";
     let latestEntities = [];
     let lastInputText = "";
+    let lastRedactedPlain = "";
 
     const CATEGORY_CONFIG = [
       { key: "private_person", name: "Person", short: "PER" },
@@ -590,7 +610,7 @@ Maya Chen</textarea>
       return out;
     }
 
-    function redactText(text, entities) {
+    function getRedactedOutputs(text, entities) {
       const escaped = (value) => value
         .replaceAll("&", "&amp;")
         .replaceAll("<", "&lt;")
@@ -607,17 +627,23 @@ Maya Chen</textarea>
       );
 
       let cursor = 0;
-      const parts = [];
+      const htmlParts = [];
+      const plainParts = [];
       for (const { start, end, label, categoryKey } of merged) {
-        parts.push(escaped(text.slice(cursor, start)));
+        const leftChunk = text.slice(cursor, start);
+        htmlParts.push(escaped(leftChunk));
+        plainParts.push(leftChunk);
         const highlighted = activeCategoryKey && categoryKey === activeCategoryKey;
         const safeLabel = escaped(label);
         const spacedLabel = ` ${safeLabel} `;
-        parts.push(highlighted ? `<mark class="redact-hit">${spacedLabel}</mark>` : spacedLabel);
+        htmlParts.push(highlighted ? `<mark class="redact-hit">${spacedLabel}</mark>` : spacedLabel);
+        plainParts.push(` ${label} `);
         cursor = end;
       }
-      parts.push(escaped(text.slice(cursor)));
-      return parts.join("").replace(/\s{2,}/g, " ");
+      const tailChunk = text.slice(cursor);
+      htmlParts.push(escaped(tailChunk));
+      plainParts.push(tailChunk);
+      return { html: htmlParts.join(""), plain: plainParts.join("") };
     }
 
     runButton.addEventListener("click", async () => {
@@ -640,7 +666,9 @@ Maya Chen</textarea>
         const entities = await classifier(text, { aggregation_strategy: "simple" });
         latestEntities = entities;
 
-        redacted.innerHTML = redactText(text, entities);
+        const rendered = getRedactedOutputs(text, entities);
+        redacted.innerHTML = rendered.html;
+        lastRedactedPlain = rendered.plain;
         output.textContent = JSON.stringify(entities, null, 2);
         activeCategoryKey = "";
         categoryShort.textContent = "Click a count to view detected words";
@@ -667,9 +695,27 @@ Maya Chen</textarea>
       const words = wordsForCategory(latestEntities, key);
       const wordPreview = words.length ? words.join(", ") : "none";
       categoryShort.textContent = `${config.short}: ${wordPreview}`;
-      if (lastInputText) redacted.innerHTML = redactText(lastInputText, latestEntities);
+      if (lastInputText) {
+        const rendered = getRedactedOutputs(lastInputText, latestEntities);
+        redacted.innerHTML = rendered.html;
+        lastRedactedPlain = rendered.plain;
+      }
       for (const button of categoryList.querySelectorAll(".category-item")) {
         button.classList.toggle("active", button.dataset.key === key);
+      }
+    });
+    copyRedactedButton.addEventListener("click", async () => {
+      const value = lastRedactedPlain || redacted.textContent || "";
+      if (!value.trim()) {
+        setStatus("Nothing to copy yet.");
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(value);
+        setStatus("Redacted text copied to clipboard.");
+      } catch (error) {
+        console.error(error);
+        setStatus("Copy failed. Please copy manually.");
       }
     });
     helpModal.addEventListener("click", (event) => {
