@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>100% Offline WebGPU -  PDF Privacy Redaction</title>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+  <link rel="stylesheet" href="./assets/vendor/fontawesome/css/all.min.css">
   <style>
     :root { color-scheme: light; --bg:#ffffff; --panel:#ffffff; --text:#130000; --muted:#5a3a00; --accent:#ffe600; --accent-2:#ff1f1f; --border:#130000; }
     * { box-sizing: border-box; }
@@ -102,10 +102,6 @@
     </div>
   </main>
   <script type="module">
-    import Tesseract from "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.esm.min.js";
-    import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.5.136/build/pdf.mjs";
-    import { PDFDocument, rgb } from "https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/+esm";
-    pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.5.136/build/pdf.worker.mjs";
 
     const fileInput = document.querySelector("#file-input");
     const runButton = document.querySelector("#run-redact");
@@ -120,6 +116,10 @@
     const categoryList = document.querySelector("#category-list");
     const categoryShort = document.querySelector("#category-short");
 
+    let Tesseract;
+    let pdfjsLib;
+    let PDFDocument;
+    let rgb;
     let modelUnavailableReason = "";
     let pdfBytes = null;
     let redactedPdfBytes = null;
@@ -129,6 +129,7 @@
     let workerPromise;
     let selectedBox = null;
     let interaction = null;
+    let dependenciesReady = false;
 
     const CATEGORY_CONFIG = [
       { key: "private_person", name: "Person", short: "PER" },
@@ -177,7 +178,30 @@
           .filter(Boolean),
       )];
     }
+
+    async function loadDependencies() {
+      if (dependenciesReady) return;
+      try {
+        const [tesseractMod, pdfjsMod, pdfLibMod] = await Promise.all([
+          import("./assets/vendor/tesseract/tesseract.esm.min.js"),
+          import("./assets/vendor/pdfjs/pdf.mjs"),
+          import("./assets/vendor/pdf-lib/pdf-lib.esm.min.js"),
+        ]);
+        Tesseract = tesseractMod.default;
+        pdfjsLib = pdfjsMod;
+        PDFDocument = pdfLibMod.PDFDocument;
+        rgb = pdfLibMod.rgb;
+        pdfjsLib.GlobalWorkerOptions.workerSrc = "./assets/vendor/pdfjs/pdf.worker.mjs";
+        dependenciesReady = true;
+      } catch (error) {
+        console.error("Offline dependency load failed:", error);
+        throw new Error(
+          "Offline dependency missing. Put files in assets/vendor/{tesseract,pdfjs,pdf-lib,fontawesome} and reload.",
+        );
+      }
+    }
     async function getWorker() {
+      await loadDependencies();
       workerPromise ??= Tesseract.createWorker("eng");
       return workerPromise;
     }
@@ -338,6 +362,7 @@
     }
 
     async function renderPdfPreview(bytes) {
+      await loadDependencies();
       previewWrap.innerHTML = "";
       pageRenders = [];
       selectedBox = null;
@@ -381,6 +406,7 @@
     }
 
     async function buildPdfFromRenderedPages(renders) {
+      await loadDependencies();
       const pdfDoc = await PDFDocument.create();
       for (const render of renders) {
         const tempCanvas = document.createElement("canvas");
@@ -487,7 +513,11 @@
       downloadBtn.disabled = true;
       updateProgress(0);
       setStatus(`Loaded ${file.name}. Click Detect + Redact PDF.`);
-      await renderPdfPreview(pdfBytes);
+      try {
+        await renderPdfPreview(pdfBytes);
+      } catch (error) {
+        setStatus(`Error: ${error.message}`);
+      }
       setStatus(`Loaded ${file.name}. Auto-starting redaction...`);
       setTimeout(() => {
         if (!runButton.disabled && pdfBytes) runButton.click();
@@ -499,6 +529,7 @@
       downloadBtn.disabled = true;
       updateProgress(0);
       try {
+        await loadDependencies();
         setStatus("Rendering PDF pages...");
         updateProgress(25);
         await renderPdfPreview(pdfBytes);
