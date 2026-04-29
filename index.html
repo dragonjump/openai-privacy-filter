@@ -159,6 +159,31 @@
       padding: 8px 12px;
       font-size: 0.78rem;
       box-shadow: 4px 4px 0 var(--accent-2);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .copy-toast {
+      position: fixed;
+      left: 50%;
+      bottom: 26px;
+      transform: translateX(-50%);
+      background: rgba(19, 0, 0, 0.88);
+      color: #fff;
+      border: 1px solid #fff;
+      padding: 10px 14px;
+      font: 700 0.82rem/1 Arial, Helvetica, sans-serif;
+      text-transform: uppercase;
+      box-shadow: 6px 6px 0 var(--accent-2);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 180ms ease;
+      z-index: 1200;
+    }
+
+    .copy-toast.show {
+      opacity: 1;
     }
 
     .status {
@@ -384,7 +409,10 @@ Maya Chen</textarea>
 
         <div class="redacted-head">
           <h2>Redacted Text</h2>
-          <button id="copy-redacted" class="copy-btn" type="button">Copy Redacted</button>
+          <button id="copy-redacted" class="copy-btn" type="button">
+            <i class="fa-regular fa-clipboard" aria-hidden="true"></i>
+            Copy Redacted
+          </button>
         </div>
         <pre id="redacted"></pre>
         <p><br><br></p>
@@ -404,6 +432,7 @@ Maya Chen</textarea>
   </main>
 
   <button id="help-fab" class="help-fab" type="button" aria-label="Open info dialog">?</button>
+  <div id="copy-toast" class="copy-toast" role="status" aria-live="polite">Copied</div>
   <div id="help-modal" class="help-modal" hidden>
     <div class="help-card" role="dialog" aria-modal="true" aria-labelledby="help-title">
       <h3 id="help-title">What is this?</h3>
@@ -428,6 +457,7 @@ Maya Chen</textarea>
     const status = document.querySelector("#status");
     const redacted = document.querySelector("#redacted");
     const copyRedactedButton = document.querySelector("#copy-redacted");
+    const copyToast = document.querySelector("#copy-toast");
     const output = document.querySelector("#output");
     const progressLabel = document.querySelector("#progress-label");
     const progressFill = document.querySelector("#progress-fill");
@@ -443,6 +473,7 @@ Maya Chen</textarea>
     let latestEntities = [];
     let lastInputText = "";
     let lastRedactedPlain = "";
+    let toastTimer;
 
     const CATEGORY_CONFIG = [
       { key: "private_person", name: "Person", short: "PER" },
@@ -458,6 +489,15 @@ Maya Chen</textarea>
     function setStatus(message) {
       status.textContent = message;
       console.log(message);
+    }
+
+    function showCopyToast(message) {
+      copyToast.textContent = message;
+      copyToast.classList.add("show");
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        copyToast.classList.remove("show");
+      }, 1400);
     }
 
     function updateProgress(percent) {
@@ -713,9 +753,11 @@ Maya Chen</textarea>
       try {
         await navigator.clipboard.writeText(value);
         setStatus("Redacted text copied to clipboard.");
+        showCopyToast("Copied");
       } catch (error) {
         console.error(error);
         setStatus("Copy failed. Please copy manually.");
+        showCopyToast("Copy Failed");
       }
     });
     helpModal.addEventListener("click", (event) => {
